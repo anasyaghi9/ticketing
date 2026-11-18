@@ -7,7 +7,12 @@ from rest_framework.views import APIView
 
 from .models import Booking, Event, Seat
 from .serializers import BookingSerializer, EventDetailSerializer, EventSerializer
-from .services import SeatNotAvailable, book_seat
+from .services import (
+    BookingNotCancellable,
+    SeatNotAvailable,
+    book_seat,
+    cancel_booking,
+)
 
 
 class EventListView(generics.ListAPIView):
@@ -45,6 +50,24 @@ class BookSeatView(APIView):
         return Response(
             BookingSerializer(booking).data, status=status.HTTP_201_CREATED
         )
+
+
+class CancelBookingView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, booking_id):
+        try:
+            booking = cancel_booking(request.user, booking_id)
+        except Booking.DoesNotExist:
+            return Response(
+                {"detail": "Booking not found."}, status=status.HTTP_404_NOT_FOUND
+            )
+        except BookingNotCancellable:
+            return Response(
+                {"detail": "Booking cannot be cancelled."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(BookingSerializer(booking).data)
 
 
 class MyBookingsView(generics.ListAPIView):

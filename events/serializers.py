@@ -1,6 +1,6 @@
+from .models import Booking, Event, Seat
 from rest_framework import serializers
 
-from .models import Booking, Event, Seat
 
 
 class EventSerializer(serializers.ModelSerializer):

@@ -37,3 +37,19 @@ def book_seat(user, seat_id):
         status=Booking.Status.PENDING,
         hold_expires_at=now + timedelta(minutes=HOLD_MINUTES),
     )
+
+class BookingNotCancellable(Exception):
+    pass
+
+
+@transaction.atomic
+def cancel_booking(user, booking_id):
+    # filtering by user means someone else's booking raises DoesNotExist
+    booking = Booking.objects.select_for_update().get(id=booking_id, user=user)
+
+    if booking.status not in ACTIVE:
+        raise BookingNotCancellable("Booking is already closed.")
+
+    booking.status = Booking.Status.CANCELLED
+    booking.save(update_fields=["status"])
+    return booking
