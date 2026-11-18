@@ -1,11 +1,12 @@
 from django.db import IntegrityError
-from django.db.models import Exists, OuterRef, Prefetch, Q
+from django.db.models import Exists, OuterRef, Prefetch, ProtectedError, Q
 from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import Booking, Event, Seat
+from .permissions import IsEventOwner, IsOrganizer
 from .serializers import BookingSerializer, EventDetailSerializer, EventSerializer
 from .services import (
     BookingNotCancellable,
@@ -15,15 +16,33 @@ from .services import (
 )
 
 
-class EventListView(generics.ListAPIView):
+class EventListCreateView(generics.ListCreateAPIView):
     queryset = Event.objects.all()
     serializer_class = EventSerializer
 
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsOrganizer()]
+        return [permissions.AllowAny()]
 
-class EventDetailView(generics.RetrieveAPIView):
-    serializer_class = EventDetailSerializer
+    def perform_create(self, serializer):
+        serializer.save(organizer=self.request.user)
+
+
+class EventDetailView(generics.RetrieveUpdateDestroyAPIView):
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.AllowAny()]
+        return [IsOrganizer(), IsEventOwner()]
+
+    def get_serializer_class(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return EventDetailSerializer
+        return EventSerializer
 
     def get_queryset(self):
+        if self.request.method not in permissions.SAFE_METHODS:
+            return Event.objects.all()
         now = timezone.now()
         active_booking = Booking.objects.filter(seat=OuterRef("pk")).filter(
             Q(status=Booking.Status.CONFIRMED)
@@ -31,6 +50,15 @@ class EventDetailView(generics.RetrieveAPIView):
         )
         seats = Seat.objects.annotate(is_taken=Exists(active_booking))
         return Event.objects.prefetch_related(Prefetch("seats", queryset=seats))
+
+    def destroy(self, request, *args, **kwargs):
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            return Response(
+                {"detail": "Event has bookings and cannot be deleted."},
+                status=status.HTTP_409_CONFLICT,
+            )
 
 
 class BookSeatView(APIView):

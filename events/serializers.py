@@ -1,12 +1,18 @@
-from .models import Booking, Event, Seat
+from django.utils import timezone
 from rest_framework import serializers
 
+from .models import Booking, Event, Seat
 
 
 class EventSerializer(serializers.ModelSerializer):
     class Meta:
         model = Event
         fields = ["id", "title", "description", "venue", "starts_at"]
+
+    def validate_starts_at(self, value):
+        if value <= timezone.now():
+            raise serializers.ValidationError("Event must start in the future.")
+        return value
 
 
 class SeatSerializer(serializers.ModelSerializer):
