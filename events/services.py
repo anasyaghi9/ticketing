@@ -13,24 +13,24 @@ class SeatNotAvailable(Exception):
     pass
 
 
+class BookingNotCancellable(Exception):
+    pass
+
+
 @transaction.atomic
 def book_seat(user, seat_id):
-    # 1) lock the seat row: other requests for this seat wait here
     seat = Seat.objects.select_for_update().get(id=seat_id)
     now = timezone.now()
 
-    # 2) free holds that already expired
     Booking.objects.filter(
         seat=seat,
         status=Booking.Status.PENDING,
         hold_expires_at__lt=now,
     ).update(status=Booking.Status.EXPIRED)
 
-    # 3) is the seat taken?
     if Booking.objects.filter(seat=seat, status__in=ACTIVE).exists():
         raise SeatNotAvailable(f"Seat {seat.label} is not available")
 
-    # 4) create a temporary hold
     return Booking.objects.create(
         user=user,
         seat=seat,
@@ -38,13 +38,9 @@ def book_seat(user, seat_id):
         hold_expires_at=now + timedelta(minutes=HOLD_MINUTES),
     )
 
-class BookingNotCancellable(Exception):
-    pass
-
 
 @transaction.atomic
 def cancel_booking(user, booking_id):
-    # filtering by user means someone else's booking raises DoesNotExist
     booking = Booking.objects.select_for_update().get(id=booking_id, user=user)
 
     if booking.status not in ACTIVE:
@@ -53,3 +49,14 @@ def cancel_booking(user, booking_id):
     booking.status = Booking.Status.CANCELLED
     booking.save(update_fields=["status"])
     return booking
+
+
+@transaction.atomic
+def create_seats(event, rows, per_row, price):
+    seats = [
+        Seat(event=event, label=f"{row}{n}", price=price)
+        for row in rows
+        for n in range(1, per_row + 1)
+    ]
+    Seat.objects.bulk_create(seats)
+    return len(seats)

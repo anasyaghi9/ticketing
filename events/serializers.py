@@ -43,3 +43,20 @@ class BookingSerializer(serializers.ModelSerializer):
             "id", "seat", "seat_label", "event_title",
             "status", "hold_expires_at", "created_at",
         ]
+
+class SeatBulkCreateSerializer(serializers.Serializer):
+    rows = serializers.ListField(
+        child=serializers.RegexField(r"^[A-Za-z]{1,2}$"),
+        min_length=1,
+        max_length=26,
+    )
+    per_row = serializers.IntegerField(min_value=1, max_value=100)
+    price = serializers.DecimalField(max_digits=8, decimal_places=2, min_value=0)
+
+    def validate(self, attrs):
+        attrs["rows"] = [r.upper() for r in attrs["rows"]]
+        if len(set(attrs["rows"])) != len(attrs["rows"]):
+            raise serializers.ValidationError("Duplicate rows.")
+        if len(attrs["rows"]) * attrs["per_row"] > 1000:
+            raise serializers.ValidationError("Too many seats in one request (max 1000).")
+        return attrs
