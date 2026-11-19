@@ -102,6 +102,16 @@ SIMPLE_JWT = {
 }
 
 
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
+
+CELERY_BEAT_SCHEDULE = {
+    "release-expired-holds": {
+        "task": "events.tasks.release_expired_holds",
+        "schedule": 60.0,
+    },
+}
+
+
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 

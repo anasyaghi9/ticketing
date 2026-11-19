@@ -60,3 +60,11 @@ def create_seats(event, rows, per_row, price):
     ]
     Seat.objects.bulk_create(seats)
     return len(seats)
+
+
+def expire_holds():
+    """Mark every pending booking whose hold has run out as expired."""
+    return Booking.objects.filter(
+        status=Booking.Status.PENDING,
+        hold_expires_at__lt=timezone.now(),
+    ).update(status=Booking.Status.EXPIRED)
