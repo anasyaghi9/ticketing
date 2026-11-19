@@ -1,6 +1,8 @@
 Django>=5.2,<5.3
 djangorestframework
+djangorestframework-simplejwt
 psycopg[binary]
 redis
 celery
-djangorestframework-simplejwt
+pytest
+pytest-django
