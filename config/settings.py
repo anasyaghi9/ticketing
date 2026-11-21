@@ -22,7 +22,8 @@ INSTALLED_APPS = [
     
     "rest_framework",
     "users",
-    "events"
+    "events",
+    "payments"
 ]
 
 AUTH_USER_MODEL = "users.User"
@@ -133,3 +134,9 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+PAYMENT_WEBHOOK_SECRET = os.environ.get("PAYMENT_WEBHOOK_SECRET", "dev-webhook-secret")
+
+# development: "sent" emails are printed in the worker logs
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+DEFAULT_FROM_EMAIL = "tickets@example.com"
