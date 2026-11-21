@@ -5,7 +5,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -49,6 +49,15 @@ services:
     depends_on:
       redis:
         condition: service_started
+
+  locust:
+    image: locustio/locust
+    profiles: ["load"]
+    volumes:
+      - ./loadtest:/mnt/locust
+    command: -f /mnt/locust/locustfile.py --host http://web:8000 --headless -u 100 -r 20 -t 30s
+    depends_on:
+      - web
 
 volumes:
   pgdata:
