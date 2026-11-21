@@ -1,10 +1,25 @@
-import pytest
-from django.utils import timezone
 from datetime import timedelta
+
+import pytest
+from django.core.cache import cache
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from events.models import Event, Seat
 from users.models import User
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cache(settings):
+    settings.CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "tests",
+        }
+    }
+    cache.clear()
+    yield
+    cache.clear()
 
 
 @pytest.fixture

@@ -1,10 +1,13 @@
+from django.core.cache import cache
 from django.db import IntegrityError
 from django.db.models import Exists, OuterRef, Prefetch, ProtectedError, Q
 from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from .cache import EVENT_LIST_KEY, EVENT_LIST_TTL
 from .models import Booking, Event, Seat
 from .permissions import IsEventOwner, IsOrganizer
 from .serializers import BookingSerializer, EventDetailSerializer, EventSerializer
@@ -24,6 +27,13 @@ class EventListCreateView(generics.ListCreateAPIView):
         if self.request.method == "POST":
             return [IsOrganizer()]
         return [permissions.AllowAny()]
+
+    def list(self, request, *args, **kwargs):
+        data = cache.get(EVENT_LIST_KEY)
+        if data is None:
+            data = list(self.get_serializer(self.get_queryset(), many=True).data)
+            cache.set(EVENT_LIST_KEY, data, EVENT_LIST_TTL)
+        return Response(data)
 
     def perform_create(self, serializer):
         serializer.save(organizer=self.request.user)
@@ -63,6 +73,8 @@ class EventDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 class BookSeatView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "booking"
 
     def post(self, request, seat_id):
         try:

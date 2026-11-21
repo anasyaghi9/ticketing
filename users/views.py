@@ -1,5 +1,7 @@
-from django.shortcuts import render
 from rest_framework import generics, permissions
+from rest_framework.throttling import ScopedRateThrottle
+from rest_framework_simplejwt.views import TokenObtainPairView
+
 from .serializers import RegisterSerializer, UserSerializer
 
 
@@ -14,3 +16,8 @@ class MeView(generics.RetrieveAPIView):
 
     def get_object(self):
         return self.request.user
+
+
+class LoginView(TokenObtainPairView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "login"

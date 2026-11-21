@@ -95,6 +95,10 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
+    "DEFAULT_THROTTLE_RATES": {
+        "login": "10/min",
+        "booking": "30/min",
+    },
 }
 
 SIMPLE_JWT = {
@@ -110,6 +114,13 @@ CELERY_BEAT_SCHEDULE = {
         "task": "events.tasks.release_expired_holds",
         "schedule": 60.0,
     },
+}
+
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.environ.get("REDIS_CACHE_URL", "redis://redis:6379/1"),
+    }
 }
 
 
