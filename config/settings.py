@@ -22,7 +22,8 @@ INSTALLED_APPS = [
     "rest_framework",
     "users",
     "events",
-    "payments"
+    "payments",
+    "drf_spectacular",
 ]
 
 AUTH_USER_MODEL = "users.User"
@@ -94,10 +95,18 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_THROTTLE_RATES": {
         "login": "10/min",
         "booking": "30/min",
     },
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Event Ticketing API",
+    "DESCRIPTION": "Seat booking with double-booking protection, holds, payments and webhooks.",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
 }
 
 SIMPLE_JWT = {
