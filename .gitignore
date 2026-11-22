@@ -3,3 +3,9 @@ __pycache__/
 *.pyc
 .venv/
 loadtest/tokens.json
+.env.prod
+staticfiles/
+.env.prod
+staticfiles/
+.env.prod
+staticfiles/

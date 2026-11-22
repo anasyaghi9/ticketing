@@ -7,7 +7,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ["SECRET_KEY"]
 DEBUG = os.environ.get("DEBUG", "False") == "True"
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "web"]
+ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1,web").split(",")
 
 # Application definition
 
@@ -29,6 +29,8 @@ INSTALLED_APPS = [
 AUTH_USER_MODEL = "users.User"
 
 MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -165,3 +167,31 @@ PAYMENT_GATEWAY = "payments.gateways.FakeGateway"
 PAYMENT_WEBHOOK_URL = os.environ.get(
     "PAYMENT_WEBHOOK_URL", "http://web:8000/api/payments/webhook/"
 )
+
+
+# ---------- static files ----------
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
+
+# ---------- production safety ----------
+from django.core.exceptions import ImproperlyConfigured  # noqa: E402
+
+if not DEBUG and len(SECRET_KEY) < 32:
+    raise ImproperlyConfigured("SECRET_KEY must be at least 32 characters when DEBUG is off.")
+
+USE_HTTPS = os.environ.get("USE_HTTPS", "False") == "True"
+CSRF_TRUSTED_ORIGINS = [
+    o for o in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",") if o
+]
+
+if USE_HTTPS:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 3600  # start with one hour; raise it once HTTPS is proven stable
+    # internal calls (health check, our own gateway callback) come over plain http
+    SECURE_REDIRECT_EXEMPT = [r"^api/health/$", r"^api/payments/webhook/$"]

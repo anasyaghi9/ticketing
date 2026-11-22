@@ -5,5 +5,7 @@ drf-spectacular
 psycopg[binary]
 redis
 celery
+gunicorn
+whitenoise
 pytest
 pytest-django
