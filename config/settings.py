@@ -159,3 +159,9 @@ PAYMENT_WEBHOOK_SECRET = os.environ.get("PAYMENT_WEBHOOK_SECRET", "dev-webhook-s
 # development: "sent" emails are printed in the worker logs
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 DEFAULT_FROM_EMAIL = "tickets@example.com"
+
+# PAYMENT_GATEWAY Conf
+PAYMENT_GATEWAY = "payments.gateways.FakeGateway"
+PAYMENT_WEBHOOK_URL = os.environ.get(
+    "PAYMENT_WEBHOOK_URL", "http://web:8000/api/payments/webhook/"
+)
