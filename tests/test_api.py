@@ -130,3 +130,9 @@ def test_attendee_cannot_create_seats(auth, attendee, event):
     response = auth(attendee).post(f"/api/events/{event.id}/seats/", body, format="json")
 
     assert response.status_code == 403
+
+def test_event_list_is_public(api_client, event):
+    response = api_client.get("/api/events/")
+
+    assert response.status_code == 200
+    assert response.json()["count"] == 1

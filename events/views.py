@@ -7,12 +7,16 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from .cache import EVENT_LIST_KEY, EVENT_LIST_TTL
+from .cache import EVENT_LIST_TTL, event_list_key
 from .models import Booking, Event, Seat
+from .pagination import EventPagination
 from .permissions import IsEventOwner, IsOrganizer
 from .serializers import BookingSerializer, EventDetailSerializer, EventSerializer
 from .services import (
+    MAX_ACTIVE_BOOKINGS_PER_EVENT,
+    BookingLimitReached,
     BookingNotCancellable,
+    EventNotBookable,
     SeatNotAvailable,
     book_seat,
     cancel_booking,
@@ -20,20 +24,60 @@ from .services import (
 
 
 class EventListCreateView(generics.ListCreateAPIView):
-    queryset = Event.objects.all()
     serializer_class = EventSerializer
+    pagination_class = EventPagination
+
+    def get_queryset(self):
+        return Event.objects.filter(starts_at__gt=timezone.now())
 
     def get_permissions(self):
         if self.request.method == "POST":
             return [IsOrganizer()]
         return [permissions.AllowAny()]
 
+    def _page_params(self, request):
+        """(page, size) when it is safe to cache this request, else None."""
+        page = request.query_params.get("page", "1")
+        size = request.query_params.get("page_size", str(EventPagination.page_size))
+        for value in (page, size):
+            if not (value.isascii() and value.isdecimal()):
+                return None
+        page, size = int(page), int(size)
+        if not (1 <= page <= 100 and 1 <= size <= 100):
+            return None
+        return page, size
+
     def list(self, request, *args, **kwargs):
-        data = cache.get(EVENT_LIST_KEY)
-        if data is None:
-            data = list(self.get_serializer(self.get_queryset(), many=True).data)
-            cache.set(EVENT_LIST_KEY, data, EVENT_LIST_TTL)
-        return Response(data)
+        params = self._page_params(request)
+        if params is None:
+            return super().list(request, *args, **kwargs)
+
+        page, size = params
+        key = event_list_key(page, size)
+        cached = cache.get(key)
+
+        if cached is None:
+            response = super().list(request, *args, **kwargs)
+            if response.status_code == 200:
+                cache.set(
+                    key,
+                    {
+                        "count": response.data["count"],
+                        "results": [dict(item) for item in response.data["results"]],
+                    },
+                    EVENT_LIST_TTL,
+                )
+            return response
+
+        next_url, previous_url = self.paginator.links(request, page, size, cached["count"])
+        return Response(
+            {
+                "count": cached["count"],
+                "next": next_url,
+                "previous": previous_url,
+                "results": cached["results"],
+            }
+        )
 
     def perform_create(self, serializer):
         serializer.save(organizer=self.request.user)
@@ -82,6 +126,19 @@ class BookSeatView(APIView):
         except Seat.DoesNotExist:
             return Response(
                 {"detail": "Seat not found."}, status=status.HTTP_404_NOT_FOUND
+            )
+        except EventNotBookable:
+            return Response(
+                {"detail": "Event has already started."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        except BookingLimitReached:
+            return Response(
+                {
+                    "detail": f"You can hold at most "
+                    f"{MAX_ACTIVE_BOOKINGS_PER_EVENT} seats per event."
+                },
+                status=status.HTTP_409_CONFLICT,
             )
         except (SeatNotAvailable, IntegrityError):
             return Response(

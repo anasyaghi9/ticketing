@@ -5,7 +5,7 @@ from django.core.cache import cache
 from django.utils import timezone
 from rest_framework.throttling import ScopedRateThrottle
 
-from events.cache import EVENT_LIST_KEY
+from events.cache import event_list_key
 from events.models import Event
 
 pytestmark = pytest.mark.django_db
@@ -14,30 +14,29 @@ pytestmark = pytest.mark.django_db
 # ---------- cache ----------
 
 def test_event_list_is_cached_after_the_first_request(api_client, event):
-    assert cache.get(EVENT_LIST_KEY) is None
+    assert cache.get(event_list_key(1, 20)) is None
 
     api_client.get("/api/events/")
 
-    assert cache.get(EVENT_LIST_KEY) is not None
+    assert cache.get(event_list_key(1, 20)) is not None
 
 
 def test_second_request_never_touches_the_database(
     api_client, event, django_assert_num_queries
 ):
-    api_client.get("/api/events/")  # fills the cache
+    first = api_client.get("/api/events/")  # fills the cache
 
     with django_assert_num_queries(0):
-        response = api_client.get("/api/events/")
+        second = api_client.get("/api/events/")
 
-    assert response.status_code == 200
-    assert len(response.json()) == 1
+    assert second.status_code == 200
+    assert second.json() == first.json()
 
 
 def test_creating_an_event_clears_the_cache(
     api_client, organizer, event, django_capture_on_commit_callbacks
 ):
     api_client.get("/api/events/")
-    assert cache.get(EVENT_LIST_KEY) is not None
 
     with django_capture_on_commit_callbacks(execute=True):
         Event.objects.create(
@@ -45,8 +44,7 @@ def test_creating_an_event_clears_the_cache(
             starts_at=timezone.now() + timedelta(days=5),
         )
 
-    assert cache.get(EVENT_LIST_KEY) is None
-    assert len(api_client.get("/api/events/").json()) == 2
+    assert api_client.get("/api/events/").json()["count"] == 2
 
 
 def test_editing_an_event_is_visible_after_invalidation(
@@ -58,7 +56,7 @@ def test_editing_an_event_is_visible_after_invalidation(
         event.title = "Renamed"
         event.save()
 
-    assert api_client.get("/api/events/").json()[0]["title"] == "Renamed"
+    assert api_client.get("/api/events/").json()["results"][0]["title"] == "Renamed"
 
 
 # ---------- rate limiting ----------

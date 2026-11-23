@@ -1,15 +1,26 @@
 from datetime import timedelta
 
+from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import Booking, Seat
 
 HOLD_MINUTES = 10
+MAX_ACTIVE_BOOKINGS_PER_EVENT = 4
 ACTIVE = [Booking.Status.PENDING, Booking.Status.CONFIRMED]
 
 
 class SeatNotAvailable(Exception):
+    pass
+
+
+class EventNotBookable(Exception):
+    pass
+
+
+class BookingLimitReached(Exception):
     pass
 
 
@@ -19,8 +30,17 @@ class BookingNotCancellable(Exception):
 
 @transaction.atomic
 def book_seat(user, seat_id):
-    seat = Seat.objects.select_for_update().get(id=seat_id)
+    get_user_model().objects.select_for_update().get(pk=user.pk)
+
+    seat = (
+        Seat.objects.select_related("event")
+        .select_for_update(of=("self",))
+        .get(id=seat_id)
+    )
     now = timezone.now()
+
+    if seat.event.starts_at <= now:
+        raise EventNotBookable("Event has already started.")
 
     Booking.objects.filter(
         seat=seat,
@@ -30,6 +50,17 @@ def book_seat(user, seat_id):
 
     if Booking.objects.filter(seat=seat, status__in=ACTIVE).exists():
         raise SeatNotAvailable(f"Seat {seat.label} is not available")
+
+    holding = (
+        Booking.objects.filter(user=user, seat__event=seat.event)
+        .filter(
+            Q(status=Booking.Status.CONFIRMED)
+            | Q(status=Booking.Status.PENDING, hold_expires_at__gt=now)
+        )
+        .count()
+    )
+    if holding >= MAX_ACTIVE_BOOKINGS_PER_EVENT:
+        raise BookingLimitReached("Too many seats held for this event.")
 
     return Booking.objects.create(
         user=user,
