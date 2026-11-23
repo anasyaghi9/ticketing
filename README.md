@@ -4,7 +4,7 @@
 
 A backend for selling tickets to events, built around one hard problem: **many people trying to book the same seat at the same moment, with no double booking.**
 
-**Stack:** Django 5.2, Django REST Framework, PostgreSQL 16, Redis 7, Celery, Docker Compose.
+**Stack:** Django 5.2, Django REST Framework, PostgreSQL 16, Redis 7, Celery, Docker Compose, Gunicorn.
 **Live demo:** coming soon (deployment in progress).
 **API docs:** `/api/docs/` (Swagger UI) when running locally.
 
@@ -49,29 +49,33 @@ flowchart LR
     Broker --> Worker[Celery worker]
     Beat[Celery beat] -->|every 60 s| Broker
     Worker --> DB
-    Gateway[Payment gateway] -->|signed webhook| API
+    Worker -->|simulated gateway| Gateway[Signed callback]
+    Gateway -->|webhook| API
 ```
 
-Nginx and Gunicorn in front of the API are part of the deployment step (planned).
+Nginx in front of the API is part of the deployment step (planned).
 
 ## Booking flow
 
 1. A user books a seat and gets a **10-minute hold** (`pending` booking).
-2. The user starts a payment for that booking.
-3. The payment gateway calls the **webhook**. The booking becomes `confirmed` and a confirmation email is queued.
-4. If the hold expires, a Celery beat task marks it `expired` every minute. A booking path also frees expired holds lazily, so a seat never stays blocked by a dead hold.
+2. The user starts a payment for that booking, then submits a card.
+3. A simulated gateway (`FakeGateway`, swappable through the `PAYMENT_GATEWAY` setting) answers the payment request immediately with `202` and calls the signed webhook asynchronously through Celery. The test card `4242424242424242` succeeds; any other card is declined.
+4. On success the booking becomes `confirmed` and a confirmation email is queued. A declined payment leaves the hold running, so the user can retry until it expires.
+5. If the hold expires, a Celery beat task marks it `expired` every minute. The booking path also frees expired holds lazily, so a seat is never blocked by a dead hold.
 
 ## Design decisions
 
 - **The booking is the source of truth.** A seat has no status column. It is available when it has no active booking, so there are never two fields that can disagree.
+- **Booking rules, enforced under the lock.** A seat can't be booked once its event has started, and one user can hold at most 4 seats per event. The user row is locked first, so even 8 parallel requests from one person are checked one at a time (covered by a test).
 - **Business logic lives in `services.py`**, not in the views. Services are plain functions, easy to test, and Celery tasks are thin wrappers around them.
-- **Webhook safety.** The signature is an HMAC-SHA256 of the raw request body, compared in constant time. Every webhook carries an `event_id` stored under a unique constraint, so the same webhook delivered twice has no second effect. The payment row is locked while it is processed.
+- **Payment gateway behind an interface.** `PaymentGateway` is a small abstract class, so a real provider can replace the simulator by changing one setting.
+- **Webhook safety.** The signature is an HMAC-SHA256 of the raw request body, compared in constant time. Every webhook carries an `event_id` stored under a unique constraint, so the same webhook delivered twice has no second effect, including Celery retries. The payment row is locked while it is processed.
 - **Side effects run after commit.** Emails and cache invalidation use `transaction.on_commit`, so a rolled-back transaction never sends an email or leaves a stale cache.
 - **Late payments are not lost.** If a payment succeeds after the booking already expired, the payment is marked `refund_required` instead of being silently dropped.
-- **Cache only what is safe.** The event list is cached in Redis for 60 seconds and invalidated on any change. Seat availability is never cached, because a stale "available" is worse than a slow page.
+- **Paginated, cached event list.** Upcoming events only, 20 per page. Each page is cached in Redis under a versioned key, so one version bump invalidates every page at once, and pagination links are built per request instead of being cached. Seat availability is never cached, because a stale "available" is worse than a slow page.
 - **Rate limits.** Login: 10 per minute per IP. Booking: 30 per minute per user.
 - **No N+1 queries.** Event detail computes availability for all seats in a single annotated query. Tests fail if the number of queries grows with the data.
-- **Ownership returns 404.** Another user's booking looks like a missing booking, so the API does not confirm that it exists.
+- **Ownership returns 404.** Another user's booking or payment looks like a missing one, so the API does not confirm that it exists.
 
 ## API overview
 
@@ -81,7 +85,7 @@ Nginx and Gunicorn in front of the API are part of the deployment step (planned)
 | POST | `/api/auth/login/` | JWT access and refresh tokens |
 | POST | `/api/auth/refresh/` | New access token |
 | GET | `/api/auth/me/` | Current user |
-| GET | `/api/events/` | Public, cached |
+| GET | `/api/events/` | Public, cached, paginated, upcoming events only |
 | POST | `/api/events/` | Organizers only |
 | GET / PATCH / DELETE | `/api/events/<id>/` | Detail with live seat availability; edits by the owner only |
 | POST | `/api/events/<id>/seats/` | Bulk seat creation, for example rows A to J, 20 per row |
@@ -89,7 +93,9 @@ Nginx and Gunicorn in front of the API are part of the deployment step (planned)
 | POST | `/api/events/bookings/<id>/cancel/` | Owner only |
 | GET | `/api/events/my-bookings/` | Your bookings |
 | POST | `/api/payments/` | Start a payment for a pending booking |
+| POST | `/api/payments/<reference>/pay/` | Submit a card to the simulated gateway (202) |
 | POST | `/api/payments/webhook/` | Signed, idempotent gateway callback |
+| GET | `/api/health/` | Database check for monitors |
 
 Full interactive documentation: `/api/docs/`.
 
@@ -106,13 +112,22 @@ The API is at `http://localhost:8000`, Swagger at `http://localhost:8000/api/doc
 
 Organizer accounts are created from the admin panel by setting the user's role. Public registration always creates attendees.
 
+## Production stack
+
+`docker-compose.prod.yml` runs Gunicorn with WhiteNoise for static files, restarts services automatically, binds the app to localhost only, and publishes no database or Redis ports. Secrets come from `.env.prod` (see `.env.prod.example`); the app refuses to start with `DEBUG` off and a `SECRET_KEY` shorter than 32 characters.
+
+```bash
+cp .env.prod.example .env.prod   # then fill in real secrets
+docker compose -p ticketing_prod -f docker-compose.prod.yml up -d --build
+```
+
 ## Tests
 
 ```bash
 docker compose exec web pytest
 ```
 
-The suite covers the booking services, permissions and status codes, the webhook (signature, duplicates, late success), the cache and its invalidation, rate limiting, query counts, and a 20-thread concurrency test that requires exactly one winner. GitHub Actions runs it against a real PostgreSQL on every push.
+59 tests cover the booking services and rules, permissions and status codes, the webhook (signature, duplicates, late success), the payment gateway, the cache and its invalidation, pagination, rate limiting, query counts, and two concurrency tests: 20 users racing for one seat, and 8 parallel requests from one user against the per-user limit. GitHub Actions runs the suite against a real PostgreSQL on every push.
 
 ## Load test
 
@@ -123,15 +138,22 @@ docker compose --profile load run --rm locust
 
 ## Index measurement
 
-`EXPLAIN ANALYZE` on the query the expiry task runs, over 100,000 bookings (`python manage.py seed_perf`, then `perf/explain_expire.sql`):
+`EXPLAIN (ANALYZE, BUFFERS)` on the query the expiry task runs, over 100,029 bookings (about 0.3% of them stale `pending` holds), PostgreSQL 16 in Docker on a laptop under WSL2. Reproduce with `python manage.py seed_perf` and `perf/explain_expire.sql`.
 
-| | Scan type | Execution time |
-|---|---|---|
-| With index on `(status, hold_expires_at)` | TBD | TBD |
-| Without the index | TBD | TBD |
+| | Plan | Execution time | Buffers read |
+|---|---|---|---|
+| With index on `(status, hold_expires_at)` | Bitmap Index Scan | 0.66 ms | 267 |
+| Without the index | Seq Scan | 8.22 ms | 936 |
 
-## Status and roadmap
+About 12 times faster and 3.5 times fewer pages read. The gap grows with table size, because a sequential scan reads every row while the index reads only the matching ones.
 
-Done: models and constraints, concurrency-safe booking, JWT auth and roles, organizer endpoints, cancel, holds with Celery expiry, payments with webhook, cache and rate limiting, tests, CI, API docs.
+## Known limitations
 
-Next: production settings, Gunicorn and Nginx, HTTPS and a domain, deployment to a VPS with CI/CD, structured logging. Later: organizer dashboard, internal wallet with a ledger.
+- Payments use a simulator; no real payment provider is integrated.
+- A payment that succeeds after its booking expired is marked `refund_required`, but refunds are not processed yet.
+- Latency figures come from the development server; production numbers will be added after deployment.
+- Not built yet: organizer dashboard and reports, cancellation emails, an internal wallet.
+
+## Roadmap
+
+Next: deploy to a VPS with Nginx, HTTPS and a domain, automatic deployment from CI, structured logging, database backups. Later: organizer dashboard, wallet with a ledger.
