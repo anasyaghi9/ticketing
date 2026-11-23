@@ -102,6 +102,7 @@ REST_FRAMEWORK = {
         "login": "10/min",
         "booking": "30/min",
     },
+    "NUM_PROXIES": int(os.environ.get("NUM_PROXIES", "0")),
 }
 
 SPECTACULAR_SETTINGS = {
