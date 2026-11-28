@@ -1,18 +1,27 @@
 import hashlib
 import hmac
 import json
+import logging
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import permissions, status
 from rest_framework.response import Response
+from rest_framework.throttling import BaseThrottle
 from rest_framework.views import APIView
 
 from events.models import Booking
 
 from .models import Payment
 from .serializers import PaymentSerializer
-from .services import BookingNotPayable, process_webhook, start_payment
+from .services import (
+    BookingNotPayable,
+    process_webhook,
+    start_payment,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 class StartPaymentView(APIView):
@@ -20,6 +29,7 @@ class StartPaymentView(APIView):
 
     def post(self, request):
         booking_id = request.data.get("booking_id")
+
         if not isinstance(booking_id, int) or isinstance(booking_id, bool):
             return Response(
                 {"booking_id": ["An integer is required."]},
@@ -30,14 +40,19 @@ class StartPaymentView(APIView):
             payment = start_payment(request.user, booking_id)
         except Booking.DoesNotExist:
             return Response(
-                {"detail": "Booking not found."}, status=status.HTTP_404_NOT_FOUND
+                {"detail": "Booking not found."},
+                status=status.HTTP_404_NOT_FOUND,
             )
         except BookingNotPayable:
             return Response(
                 {"detail": "Booking cannot be paid."},
                 status=status.HTTP_409_CONFLICT,
             )
-        return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
+
+        return Response(
+            PaymentSerializer(payment).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class PaymentWebhookView(APIView):
@@ -49,11 +64,28 @@ class PaymentWebhookView(APIView):
         raw = request.body  # must be read before request.data is touched
         signature = request.headers.get("X-Signature", "")
         expected = hmac.new(
-            settings.PAYMENT_WEBHOOK_SECRET.encode(), raw, hashlib.sha256
+            settings.PAYMENT_WEBHOOK_SECRET.encode(),
+            raw,
+            hashlib.sha256,
         ).hexdigest()
-        if not hmac.compare_digest(signature.encode(), expected.encode()):
+
+        if not hmac.compare_digest(
+            signature.encode(),
+            expected.encode(),
+        ):
+            # never log the signature itself, only who sent it
+            logger.warning(
+                "webhook_invalid_signature",
+                extra={
+                    "fields": {
+                        "ip": BaseThrottle().get_ident(request),
+                    }
+                },
+            )
+
             return Response(
-                {"detail": "Invalid signature."}, status=status.HTTP_401_UNAUTHORIZED
+                {"detail": "Invalid signature."},
+                status=status.HTTP_401_UNAUTHORIZED,
             )
 
         try:
@@ -62,8 +94,10 @@ class PaymentWebhookView(APIView):
             reference = data["reference"]
             outcome = data["outcome"]
         except (ValueError, KeyError, TypeError):
+            logger.warning("webhook_malformed_payload")
             return Response(
-                {"detail": "Malformed payload."}, status=status.HTTP_400_BAD_REQUEST
+                {"detail": "Malformed payload."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         valid = (
@@ -73,14 +107,21 @@ class PaymentWebhookView(APIView):
             and outcome in ("succeeded", "failed")
         )
         if not valid:
+            logger.warning("webhook_malformed_payload")
             return Response(
-                {"detail": "Malformed payload."}, status=status.HTTP_400_BAD_REQUEST
+                {"detail": "Malformed payload."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
             result = process_webhook(event_id, reference, outcome)
         except (Payment.DoesNotExist, DjangoValidationError):
+            logger.warning(
+                "webhook_unknown_reference",
+                extra={"fields": {"event_id": event_id}},
+            )
             return Response(
-                {"detail": "Payment not found."}, status=status.HTTP_404_NOT_FOUND
+                {"detail": "Payment not found."},
+                status=status.HTTP_404_NOT_FOUND,
             )
         return Response({"status": result})

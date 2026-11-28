@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
@@ -6,6 +7,8 @@ from django.db.models import Q
 from django.utils import timezone
 
 from .models import Booking, Seat
+
+logger = logging.getLogger(__name__)
 
 HOLD_MINUTES = 10
 MAX_ACTIVE_BOOKINGS_PER_EVENT = 4
@@ -62,12 +65,17 @@ def book_seat(user, seat_id):
     if holding >= MAX_ACTIVE_BOOKINGS_PER_EVENT:
         raise BookingLimitReached("Too many seats held for this event.")
 
-    return Booking.objects.create(
+    booking = Booking.objects.create(
         user=user,
         seat=seat,
         status=Booking.Status.PENDING,
         hold_expires_at=now + timedelta(minutes=HOLD_MINUTES),
     )
+    logger.info(
+        "booking_created",
+        extra={"fields": {"booking_id": booking.id, "seat_id": seat.id, "user_id": user.id}},
+    )
+    return booking
 
 
 @transaction.atomic
@@ -79,6 +87,10 @@ def cancel_booking(user, booking_id):
 
     booking.status = Booking.Status.CANCELLED
     booking.save(update_fields=["status"])
+    logger.info(
+        "booking_cancelled",
+        extra={"fields": {"booking_id": booking.id, "user_id": user.id}},
+    )
     return booking
 
 
@@ -95,7 +107,10 @@ def create_seats(event, rows, per_row, price):
 
 def expire_holds():
     """Mark every pending booking whose hold has run out as expired."""
-    return Booking.objects.filter(
+    count = Booking.objects.filter(
         status=Booking.Status.PENDING,
         hold_expires_at__lt=timezone.now(),
     ).update(status=Booking.Status.EXPIRED)
+    if count:
+        logger.info("holds_expired", extra={"fields": {"count": count}})
+    return count

@@ -196,3 +196,30 @@ if USE_HTTPS:
     SECURE_HSTS_SECONDS = 3600  # start with one hour; raise it once HTTPS is proven stable
     # internal calls (health check, our own gateway callback) come over plain http
     SECURE_REDIRECT_EXEMPT = [r"^api/health/$", r"^api/payments/webhook/$"]
+
+
+# logging
+
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
+LOG_JSON = os.environ.get("LOG_JSON", "False") == "True"
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "json": {"()": "config.logs.JsonFormatter"},
+        "plain": {
+            "()": "config.logs.PlainFormatter",
+            "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "json" if LOG_JSON else "plain",
+        },
+    },
+    "root": {"handlers": ["console"], "level": LOG_LEVEL},
+    "loggers": {"django.request": {"level": "ERROR"}},
+}
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False
